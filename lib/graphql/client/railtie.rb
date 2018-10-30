@@ -37,7 +37,7 @@ module GraphQL
         end
       end
 
-      config.after_initialize do |app|
+      initializer "graphql.configure_views_namespace" do |app|
         require "graphql/client/view_module"
 
         path = Rails.root.join("lib/api/app/views").to_path
