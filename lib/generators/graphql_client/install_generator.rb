@@ -8,20 +8,12 @@ module GraphqlClient
     source_root File.expand_path("../templates", __FILE__)
 
     class_option :schema,
-      type: :string,
-      default: nil,
-      desc: "Name for the schema constant (default: {app_name}Schema)"
+                 type: :string,
+                 default: nil,
+                 desc: "Name for the schema constant (default: {app_name}Schema)"
 
     def install
       template("initializer.erb", "config/initializers/graphql-client.rb")
-
-      inject_into_file "app/controllers/application_controller.rb", after: "class ApplicationController < ActionController::Base\n" do <<-'RUBY'
-  def graphql_context
-    # Add your context here
-    {}
-  end
-RUBY
-      end
     end
 
     private

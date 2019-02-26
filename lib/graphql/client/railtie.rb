@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 require "graphql"
 require "graphql/client"
-require "graphql/client/controller_helpers"
 require "rails/railtie"
 
 module GraphQL
@@ -22,19 +21,8 @@ module GraphQL
       end
 
       initializer "graphql.configure_erb_implementation" do |_app|
-        if Rails.version >= "5.1"
-          require "graphql/client/erubi"
-          ActionView::Template::Handlers::ERB.erb_implementation = GraphQL::Client::Erubi
-        else
-          require "graphql/client/erubis"
-          ActionView::Template::Handlers::ERB.erb_implementation = GraphQL::Client::Erubis
-        end
-      end
-
-      initializer "graphql.configure_controller_helpers" do |_app|
-        ActiveSupport.on_load(:action_controller) do
-          include GraphQL::Client::ControllerHelpers
-        end
+        require "graphql/client/erb"
+        ActionView::Template::Handlers::ERB.erb_implementation = GraphQL::Client::ERB
       end
 
       config.after_initialize do |app|
@@ -42,6 +30,9 @@ module GraphQL
 
         path = config.graphql.client_views_path || app.paths["app/views"].first
 
+        # TODO: Accessing config.graphql.client during the initialization
+        # process seems error prone. The application may reassign
+        # config.graphql.client after this block is executed.
         client = config.graphql.client
 
         config.watchable_dirs[path] = [:erb]

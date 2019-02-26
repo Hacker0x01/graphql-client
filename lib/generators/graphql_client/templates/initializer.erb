@@ -1,11 +1,11 @@
 # frozen_string_literal: true
 
-module <%= app_name %>
-  Client = ::GraphQL::Client.new(
-    schema: <%= schema_name %>,
-    execute: <%= schema_name %>,
-    enforce_collocated_callers: Rails.env.development? || Rails.env.test?,
-  )
-end
+client = GraphQL::Client.new(
+schema: Rails.root.join('db/schema.json'),
+execute: GraphQL::Client::HTTP.new('https://foo.com/')
+)
+Rails.application.config.graphql.client = client
 
-Rails.application.config.graphql.client = <%= app_name %>::Client
+# optional change the location of the views. Defaults to: `app/views`
+# Rails.application.config.graphql.client_views_path = Rails.root.join('path/to/views').to_path
+
