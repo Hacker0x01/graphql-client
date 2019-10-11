@@ -41,31 +41,61 @@ module GraphQL
           field_nodes.each do |result_name, field_ast_nodes|
             # `result_name` might be an alias, so make sure to get the proper name
             field_name = field_ast_nodes.first.name
-            field_definition = definition.client.schema.get_field(type.name, field_name)
+            field_definition = definition.client.schema.get_field(type.graphql_name, field_name)
             field_return_type = field_definition.type
             field_classes[result_name.to_sym] = schema_module.define_class(definition, field_ast_nodes, field_return_type)
           end
 
-          Class.new(self) do
-            define_fields(field_classes)
+          klass = Class.new(self)
+          klass.define_fields(field_classes)
+          klass.instance_variable_set(:@source_definition, definition)
+          klass.instance_variable_set(:@_spreads, definition.indexes[:spreads][ast_nodes.first])
 
-            if definition.client.enforce_collocated_callers
-              keys = field_classes.keys.map { |key| ActiveSupport::Inflector.underscore(key) }
-              Client.enforce_collocated_callers(self, keys, definition.source_location[0])
+          if definition.client.enforce_collocated_callers
+            keys = field_classes.keys.map { |key| ActiveSupport::Inflector.underscore(key) }
+            Client.enforce_collocated_callers(klass, keys, definition.source_location[0])
+          end
+
+          klass
+        end
+
+        PREDICATE_CACHE = Hash.new { |h, name|
+          h[name] = -> { @data[name] ? true : false }
+        }
+
+        METHOD_CACHE = Hash.new { |h, key|
+          h[key] = -> {
+            name = key.to_s
+            type = self.class::FIELDS[key]
+            @casted_data.fetch(name) do
+              @casted_data[name] = type.cast(@data[name], @errors.filter_by_path(name))
             end
+          }
+        }
 
-            class << self
-              attr_reader :source_definition
-              attr_reader :_spreads
+        MODULE_CACHE = Hash.new do |h, fields|
+          h[fields] = Module.new do
+            fields.each do |name|
+              GraphQL::Client::Schema::ObjectType.define_cached_field(name, self)
             end
-
-            @source_definition = definition
-            @_spreads = definition.indexes[:spreads][ast_nodes.first]
           end
         end
 
+        FIELDS_CACHE = Hash.new { |h, k| h[k] = k }
+
         def define_fields(fields)
-          fields.each { |name, type| define_field(name, type) }
+          const_set :FIELDS, FIELDS_CACHE[fields]
+          mod = MODULE_CACHE[fields.keys.sort]
+          include mod
+        end
+
+        def self.define_cached_field(name, ctx)
+          key = name
+          name = -name.to_s
+          method_name = ActiveSupport::Inflector.underscore(name)
+
+          ctx.send(:define_method, method_name, &METHOD_CACHE[key])
+          ctx.send(:define_method, "#{method_name}?", &PREDICATE_CACHE[name])
         end
 
         def define_field(name, type)
@@ -105,7 +135,7 @@ module GraphQL
               true
             else
               schema = definition.client.schema
-              type_condition = schema.types[selected_ast_node.type.name]
+              type_condition = definition.client.get_type(selected_ast_node.type.name)
               applicable_types = schema.possible_types(type_condition)
               # continue if this object type is one of the types matching the fragment condition
               applicable_types.include?(type)
@@ -122,7 +152,7 @@ module GraphQL
             end
 
             schema = definition.client.schema
-            type_condition = schema.types[fragment_definition.type.name]
+            type_condition = definition.client.get_type(fragment_definition.type.name)
             applicable_types = schema.possible_types(type_condition)
             # continue if this object type is one of the types matching the fragment condition
             continue_selection = applicable_types.include?(type)
@@ -147,6 +177,13 @@ module GraphQL
       end
 
       class ObjectClass
+        module ClassMethods
+          attr_reader :source_definition
+          attr_reader :_spreads
+        end
+
+        extend ClassMethods
+
         def initialize(data = {}, errors = Errors.new)
           @data = data
           @casted_data = {}
@@ -174,12 +211,13 @@ module GraphQL
             raise e
           end
 
-          field = type.all_fields.find do |f|
+          all_fields = type.respond_to?(:all_fields) ? type.all_fields : type.fields.values
+          field = all_fields.find do |f|
             f.name == e.name.to_s || ActiveSupport::Inflector.underscore(f.name) == e.name.to_s
           end
 
           unless field
-            raise UnimplementedFieldError, "undefined field `#{e.name}' on #{type} type. https://git.io/v1y3m"
+            raise UnimplementedFieldError, "undefined field `#{e.name}' on #{type.graphql_name} type. https://git.io/v1y3m"
           end
 
           if @data.key?(field.name)
