@@ -16,13 +16,13 @@ module GraphQL
     module Schema
       module ClassMethods
         def define_class(definition, ast_nodes, type)
-          type_class = case type
-          when GraphQL::NonNullType
+          type_class = case type.kind.name
+          when "NON_NULL"
             define_class(definition, ast_nodes, type.of_type).to_non_null_type
-          when GraphQL::ListType
+          when "LIST"
             define_class(definition, ast_nodes, type.of_type).to_list_type
           else
-            get_class(type.name).define_class(definition, ast_nodes)
+            get_class(type.graphql_name).define_class(definition, ast_nodes)
           end
 
           ast_nodes.each do |ast_node|
@@ -52,20 +52,23 @@ module GraphQL
           const_set(class_name, klass)
         end
 
+        DIRECTIVES = { include: IncludeDirective,
+                       skip: SkipDirective }.freeze
+
+        def directives
+          DIRECTIVES
+        end
+
         private
 
         def normalize_type_name(type_name)
-          type_name =~ /\A[A-Z]/ ? type_name : type_name.camelize
+          /\A[A-Z]/.match?(type_name) ? type_name : type_name.camelize
         end
       end
 
       def self.generate(schema)
         mod = Module.new
         mod.extend ClassMethods
-
-        mod.define_singleton_method :schema do
-          schema
-        end
 
         cache = {}
         schema.types.each do |name, type|
@@ -76,29 +79,24 @@ module GraphQL
           end
         end
 
-        directives = {}
-        mod.define_singleton_method(:directives) { directives }
-        directives[:include] = IncludeDirective
-        directives[:skip] = SkipDirective
-
         mod
       end
 
       def self.class_for(schema, type, cache)
         return cache[type] if cache[type]
 
-        case type
-        when GraphQL::InputObjectType
+        case type.kind.name
+        when "INPUT_OBJECT"
           nil
-        when GraphQL::ScalarType
+        when "SCALAR"
           cache[type] = ScalarType.new(type)
-        when GraphQL::EnumType
+        when "ENUM"
           cache[type] = EnumType.new(type)
-        when GraphQL::ListType
+        when "LIST"
           cache[type] = class_for(schema, type.of_type, cache).to_list_type
-        when GraphQL::NonNullType
+        when "NON_NULL"
           cache[type] = class_for(schema, type.of_type, cache).to_non_null_type
-        when GraphQL::UnionType
+        when "UNION"
           klass = cache[type] = UnionType.new(type)
 
           type.possible_types.each do |possible_type|
@@ -107,22 +105,23 @@ module GraphQL
           end
 
           klass
-        when GraphQL::InterfaceType
+        when "INTERFACE"
           cache[type] = InterfaceType.new(type)
-        when GraphQL::ObjectType
+        when "OBJECT"
           klass = cache[type] = ObjectType.new(type)
 
           type.interfaces.each do |interface|
             klass.send :include, class_for(schema, interface, cache)
           end
-
-          type.all_fields.each do |field|
+          # Legacy objects have `.all_fields`
+          all_fields = type.respond_to?(:all_fields) ? type.all_fields : type.fields.values
+          all_fields.each do |field|
             klass.fields[field.name.to_sym] = class_for(schema, field.type, cache)
           end
 
           klass
         else
-          raise TypeError, "unexpected #{type.class}"
+          raise TypeError, "unexpected #{type.class} (#{type.inspect})"
         end
       end
     end
